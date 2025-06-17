@@ -4,7 +4,7 @@ A growing collection of Python utilities for automating tasks with Google APIs.
 
 This repository includes scripts that simplify authentication, API calls, and common tasks across Google services such as Gmail, Drive, Calendar, and more.
 
-#Google API Service Authenticator
+# Google API Service Authenticator
 
 ## 1. Overview
 
