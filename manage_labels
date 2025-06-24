@@ -1,0 +1,67 @@
+from gmailapi import (
+    init_gmail_service,
+    create_label,
+    list_labels,
+    modify_label,
+    delete_label,
+    get_label_details
+)
+
+# Step 1: Initialize Gmail service
+client_file = 'client_secret.json'
+service = init_gmail_service(client_file)
+
+# Step 2: Define main labels and sub-labels
+labels = ['2025 Smr - CS 56']
+labels_smc = ['Welcome to Module']
+created_labels = []
+
+for label_name in labels:
+    try:
+        # Create main label
+        label = create_label(service, label_name)
+        print(f'Label "{label["name"]}" created')
+        created_labels.append(label)
+
+        # Create sub-labels only if this is the main label we're working with
+        if label['name'] == '2025 Smr - CS 56':  
+            smc_label_id = label['id']
+
+            for sub_label in labels_smc:
+                sub_label_name = f'{label["name"]}/{sub_label}'
+                sub_label_created = create_label(service, sub_label_name)
+                print(f'Sub-label "{sub_label_name}" created')
+
+    except Exception as e:
+        print(f'Label creation failed for "{label_name}": {str(e)}')
+
+# List all labels
+gmail_labels = list_labels(service)
+print(f"\nAll labels:\n{[label['name'] for label in gmail_labels]}")
+
+# Example: Get details for the first created label
+if created_labels:
+    label_detail = get_label_details(service, created_labels[0]['id'])
+    print(f"\nDetails for label '{created_labels[0]['name']}': {label_detail}")
+
+# Example: Modify the first created label’s name and color
+if len(created_labels) > 0:
+    modify_label(
+        service,
+        created_labels[0]['id'],
+        name='Misc',  # new name
+        color={
+            'textColor': '#eaa041',
+            'backgroundColor': '#285bac'
+        }
+    )
+    print(f"Modified label '{created_labels[0]['name']}'")
+
+# Note: Avoid modifying created_labels[1] unless you have verified it exists
+
+# Optional: Delete all user labels (be careful!)
+# Uncomment to enable
+# for label in gmail_labels:
+#     if label['type'] == 'user':
+#         delete_label(service, label['id'])
+#         print(f'Deleted label: {label["name"]}')
