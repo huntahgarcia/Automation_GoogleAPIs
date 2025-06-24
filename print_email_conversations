@@ -1,0 +1,20 @@
+import marimo as mo
+from gmailapi import init_gmail_service, get_email_messages, get_message_and_replies
+
+client_file = 'client_secret.json'
+service = init_gmail_service(client_file)
+
+email_messages = get_email_messages(service, max_results=1)
+
+if email_messages:
+    message_id = email_messages[0]['id']
+    message_chain = get_message_and_replies(service, message_id)
+
+    for msg in message_chain:
+        print(f"From: {msg['from']}")
+        print(f"Subject: {msg['subject']}")
+        print(f"Date: {msg['date']}")
+        print(f"Body: {msg['body'][:100]}...")  # show preview
+        print("-" * 50)
+else:
+    print("No email messages retrieved.")
