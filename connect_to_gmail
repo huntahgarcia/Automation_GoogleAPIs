@@ -1,0 +1,16 @@
+import sys
+sys.path.append('/Users/')
+
+
+from GoogleAPIs import create_service # accessing the file in folder above
+
+
+client_secret_file = '/Users/'
+API_SERVICE_NAME = 'gmail'
+API_VERSION = 'v1'
+SCOPES = ['https://mail.google.com/']
+
+
+service = create_service(client_secret_file, API_SERVICE_NAME, API_VERSION, *SCOPES)
+
+dir(service)
