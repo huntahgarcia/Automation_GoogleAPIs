@@ -1,0 +1,99 @@
+
+import os
+import base64
+from pathlib import Path
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+
+
+from gmailapi import (
+    init_gmail_service,
+    list_draft_email_messages,
+    create_draft_email,
+    get_email_draft_message_details,  
+    send_draft_email,
+    delete_draft_email
+)
+
+
+def create_draft_email(service, to, subject, body, body_type='plain', attachment_paths=None):
+    # Create the base message
+    message = MIMEMultipart()
+    message['to'] = to
+    message['subject'] = subject
+
+    # Attach body text
+    if body_type.lower() not in ['plain', 'html']:
+        raise ValueError("body_type must be either 'plain' or 'html'")
+    
+    message.attach(MIMEText(body, body_type.lower()))
+
+    # Attach files if any
+    if attachment_paths:
+        for attachment_path in attachment_paths:
+            if os.path.exists(attachment_path):
+                filename = os.path.basename(attachment_path)
+                with open(attachment_path, "rb") as attachment:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(attachment.read())
+                    encoders.encode_base64(part)
+                    part.add_header(
+                        "Content-Disposition",
+                        f'attachment; filename="{filename}"'
+                    )
+                    message.attach(part)
+            else:
+                raise FileNotFoundError(f"File not found: {attachment_path}")
+
+    # Encode the message and send as draft
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
+
+    draft = service.users().drafts().create(
+        userId='me',
+        body={'message': {'raw': raw_message}}
+    ).execute()
+
+    return draft
+
+
+# ---- MAIN EXECUTION ---- #
+
+# Step 1: Initialize Gmail service
+client_file = 'client_secret.json'
+service = init_gmail_service(client_file)
+
+# Step 2: Prepare message details
+to_address = 'example@gmail.com'
+email_subject = 'Test Email Draft API'
+email_body = 'This is a test email draft created using the Gmail API.'
+
+# Step 3: Define the attachment directory and files
+attachment_dir = Path('/Users/')
+attachment_files = list(attachment_dir.glob('*'))  
+
+# Step 4: Create the draft
+response_draft_email = create_draft_email(
+    service,
+    to=to_address,
+    subject=email_subject,
+    body=email_body,
+    body_type='plain',
+    attachment_paths=[str(path) for path in attachment_files]
+)
+
+# Step 5: Print confirmation
+print("Draft created successfully:")
+print(f"Draft ID: {response_draft_email['id']}")
+print(f"To: {to_address}")
+print(f"Subject: {email_subject}")
+print(f"Attachments: {[f.name for f in attachment_files]}")
+
+
+drafts = list_draft_email_messages(service, max_results=10)
+for draft in drafts: 
+    draft_message_detail = get_email_draft_message_details(service, draft['id'])  # fixed function name
+    delete_draft_email(service, draft['id'])
+    print(f'Draft email "{draft_message_detail["subject"]}" deleted.')
+    
