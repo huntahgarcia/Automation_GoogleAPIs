@@ -1,0 +1,66 @@
+import marimo as mo
+from gmailapi import (
+    init_gmail_service,
+    search_emails,
+    get_email_message_details,
+    map_label_name_to_id,
+    modify_email_labels
+)
+
+# Step 1: Initialize Gmail service
+client_file = 'client_secret.json'
+service = init_gmail_service(client_file)
+
+# Step 2: Search for emails with specific subject
+query = 'subject:"2025 Smr - CS 56"'
+email_messages_raw = search_emails(service, query, max_results=5)
+
+# Step 3: Get full details for each email
+email_messages = [
+    {
+        'id': email['id'],
+        'threadId': email['threadId'],
+        **get_email_message_details(service, email['id'])
+    }
+    for email in email_messages_raw
+]
+
+# Step 4: Print email details
+for msg in email_messages:
+    print(f"Message ID: {msg['id']}")
+    print(f"Thread ID: {msg['threadId']}")
+    print(f"Subject: {msg['subject']}")
+    print(f"From: {msg['sender']}")
+    print(f"Date: {msg['date']}")
+    print(f"Labels: {msg['label']}")
+    print(f"Snippet: {msg['snippet']}")
+    print('-' * 50)
+
+# Step 5: Get label ID for '2025 Smr - CS 56'
+smc_label_id = map_label_name_to_id(service, '2025 Smr - CS 56')
+
+if smc_label_id is None:
+    print("Label '2025 Smr - CS 56' not found. Please create it first.")
+else:
+    # Step 6: Add label and STARRED to each email found
+    for email_message in email_messages:
+        modify_email_labels(
+            service,
+            user_id='me',
+            message_id=email_message['id'],
+            add_labels=[smc_label_id, 'STARRED']
+        )
+        print(f"Added '2025 Smr - CS 56' label and 'STARRED' to email: {email_message['subject']}")
+
+    # Step 7: Remove labels from emails sent by notifications@instructure.com
+    #for email_message in email_messages:
+    #    email_message_detail = get_email_message_details(service, email_message['id'])
+    #    if 'notifications@instructure.com' in email_message_detail['sender']:
+    #        modify_email_labels(
+    #            service,
+    #            user_id='me',
+    #            message_id=email_message['id'],
+    #           remove_labels=[smc_label_id, 'STARRED']
+    #        )
+    #        print(f"Removed '2025 Smr - CS 56' and 'STARRED' labels from email: {email_message_detail['subject']}")
+
