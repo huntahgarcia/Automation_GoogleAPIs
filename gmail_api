@@ -1,0 +1,467 @@
+import os
+import base64
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase  
+from email import encoders
+from googleapis import create_service  
+from googleapiclient.errors import HttpError
+
+
+def init_gmail_service(client_file, api_name='gmail', api_version='v1', scopes=['https://mail.google.com/']):
+    return create_service(client_file, api_name, api_version, *scopes)
+
+
+def _extract_body(payload):
+    body = '<Text body not available>'
+    if 'parts' in payload:
+        for part in payload['parts']:
+            if part['mimeType'] == 'multipart/alternative':
+                for subpart in part.get('parts', []):
+                    if subpart.get('mimeType') == 'text/plain' and 'data' in subpart.get('body', {}):
+                        body = base64.urlsafe_b64decode(subpart['body']['data']).decode('utf-8')
+                        break
+            elif part.get('mimeType') == 'text/plain' and 'data' in part.get('body', {}):
+                body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                break
+    elif 'body' in payload and 'data' in payload['body']:
+        body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+    return body
+
+
+def get_email_messages(service, user_id='me', label_ids=None, folder_name=None, max_results=5):
+    messages = []
+    next_page_token = None
+
+    if folder_name:
+        label_results = service.users().labels().list(userId=user_id).execute()
+        labels = label_results.get('labels', [])
+        folder_label_id = next((label['id'] for label in labels if label['name'].upper() == folder_name.upper()), None)
+        if folder_label_id:
+            if label_ids:
+                label_ids.append(folder_label_id)
+            else:
+                label_ids = [folder_label_id]
+        else:
+            raise ValueError(f"Folder '{folder_name}' not found.")
+            
+    while True:
+        result = service.users().messages().list(
+            userId=user_id,
+            labelIds=label_ids,
+            maxResults=min(500, max_results - len(messages)) if max_results else 500,
+            pageToken=next_page_token
+        ).execute()
+
+        messages.extend(result.get('messages', []))
+        next_page_token = result.get('nextPageToken')
+
+        if not next_page_token or (max_results and len(messages) >= max_results):
+            break
+
+    return messages[:max_results] if max_results else messages
+
+
+def get_email_message_details(service, msg_id):
+    message = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
+    payload = message['payload']
+    headers = payload.get('headers', [])
+
+    subject = next((header['value'] for header in headers if header['name'].lower() == 'subject'), 'No Subject')
+    sender = next((header['value'] for header in headers if header['name'].lower() == 'from'), 'No Sender')
+    recipients = next((header['value'] for header in headers if header['name'].lower() == 'to'), 'No Recipients')
+    snippet = message.get('snippet', 'No Snippet')
+    date = next((header['value'] for header in headers if header['name'].lower() == 'date'), 'No Date')
+    star = 'STARRED' in message.get('labelIds', [])
+    label = ', '.join(message.get('labelIds', []))
+
+    has_attachments = any(
+        part.get('filename') for part in payload.get('parts', []) if part.get('filename')
+    )
+
+    body = _extract_body(payload)
+
+    return {
+        'subject': subject,
+        'sender': sender,
+        'recipients': recipients,
+        'body': body,
+        'snippet': snippet,
+        'has_attachments': has_attachments,
+        'date': date,
+        'star': star,
+        'label': label,
+    }
+
+
+def send_email(service, to, subject, body, body_type='plain', attachment_paths=None):
+    message = MIMEMultipart()
+    message['to'] = to
+    message['subject'] = subject
+
+    if body_type.lower() not in ['plain', 'html']:
+        raise ValueError("body_type must be either 'plain' or 'html'")
+
+    message.attach(MIMEText(body, body_type.lower()))
+
+    if attachment_paths:
+        for attachment_path in attachment_paths:
+            if os.path.exists(attachment_path):
+                filename = os.path.basename(attachment_path)
+                with open(attachment_path, 'rb') as attachment:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(attachment.read())
+                    encoders.encode_base64(part)
+                    part.add_header(
+                        "Content-Disposition",
+                        f"attachment; filename={filename}",
+                    )
+                    message.attach(part)
+            else:
+                raise FileNotFoundError(f"File not found - {attachment_path}")
+
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+    send_result = service.users().messages().send(
+        userId='me',
+        body={'raw': raw_message}
+    ).execute()
+
+    return send_result
+
+def download_attachments_parent(service, user_id, msg_id, target_dir):
+    message = service.users().messages().get(userId=user_id,id=msg_id).execute()
+    for part in message ['payload']['parts']:
+        if part['filename']:
+            att_id = part['body']['attachmentId']
+            att = service.users().messages().attachments().get(userId=user_id, messageId=msg_id, id=att_id).execute()
+            data = att['data']
+            file_data = base64.urlsafe_b64decode(data.encode('UTF-8'))
+            file_path = os.path.join(target_dir,part['filename'])
+            print('Saving attachment to: ', file_path)
+            with open(file_path,'wb') as f: 
+                f.write(file_data)
+
+def download_attachments_all(service, user_id, msg_id, target_dir):
+    thread = service.users().threads().get(userId=user_id, id=msg_id).execute()
+    for message in thread ['messages']:
+        for part in message['payload']['parts']:
+            if part['filename']:
+                attn_id = part['body']['attachmentId']
+                att = service.users().messages().attachments().get(userId=user_id, messageId=message['id'], id = attn_id).execute()
+                data = att['data']
+                file_data = base64.urlsafe_b64decode(data.encode('UTF-8'))
+                file_path = os.path.join(target_dir, part ['filename'])
+                print('Saving attachment to: ', file_path)
+                with open(file_path, 'wb') as f: 
+                    f.write(file_data)
+
+def search_emails(service, query, user_id='me', max_results=5):
+    messages = []
+    next_page_token = None
+
+    while True:
+        result = service.users().messages().list(
+            userId=user_id,
+            q=query,
+            maxResults=min(500, max_results - len(messages)) if max_results else 500,
+            pageToken=next_page_token
+        ).execute()
+
+        messages.extend(result.get('messages', []))
+        next_page_token = result.get('nextPageToken')
+
+        if not next_page_token or (max_results and len(messages) >= max_results):
+            break
+
+    return messages[:max_results] if max_results else messages
+
+
+def search_email_conversations(service, query, user_id='me', max_results=5):
+    conversations = []
+    next_page_token = None
+
+    while True: 
+        result = service.users().threads().list(
+            userId=user_id,
+            q=query,
+            maxResults=min(500, max_results - len(conversations)) if max_results else 500,
+            pageToken=next_page_token
+        ).execute()
+
+        conversations.extend(result.get('threads', []))
+        next_page_token = result.get('nextPageToken')
+
+        if not next_page_token or (max_results and len(conversations) >= max_results):
+            break
+
+    return conversations[:max_results] if max_results else conversations
+
+
+def create_label(service, name, label_list_visibility='labelShow', message_list_visibility='show'):
+    label = {
+        'name': name, 
+        'labelListVisibility': label_list_visibility, 
+        'messageListVisibility': message_list_visibility
+    }
+    
+    created_label = service.users().labels().create(userId='me', body=label).execute()
+    return created_label
+
+
+def list_labels(service):
+    results = service.users().labels().list(userId='me').execute()
+    labels = results.get('labels', [])
+    return labels
+
+def get_label_details(service, label_id):
+    return service.users().labels().get(userId='me', id=label_id).execute()
+
+
+def modify_label(service, label_id, **updates):
+    label = service.users().labels().get(userId='me', id=label_id).execute()
+    for key, value in updates.items():
+        label[key] = value
+    updated_label = service.users().labels().update(userId = 'me', id=label_id, body=label).execute()
+    return updated_label
+
+def delete_label(service, label_id):
+    service.users().labels().delete(userId='me', id=label_id).execute()
+
+def map_label_name_to_id(service, label_name):
+    labels = list_labels(service)
+    label = next((label for label in labels if label['name'].lower() == label_name.lower()), None)
+    return label['id'] if label else None
+    
+
+def modify_email_labels(service, user_id, message_id, add_labels=None, remove_labels=None): 
+    def batch_labels(labels, batch_size=100):
+        return [labels[i:i + batch_size] for i in range(0, len(labels), batch_size)]
+    
+    if add_labels: 
+        for batch in batch_labels(add_labels): 
+            service.users().messages().modify(
+                userId=user_id,
+                id=message_id, 
+                body={'addLabelIds': batch}
+            ).execute()
+    
+    if remove_labels: 
+        for batch in batch_labels(remove_labels):
+            service.users().messages().modify(
+                userId=user_id, 
+                id=message_id, 
+                body={'removeLabelIds': batch}
+            ).execute()
+            
+def trash_email(service, user_id, message_id):
+    service.users().messages().trash(userId=user_id, id=message_id).execute()
+ 
+    
+def batch_trash_emails(service, user_id, message_ids, batch_size=100):
+    print(f"Batch trashing {len(message_ids)} messages...")
+
+    for i in range(0, len(message_ids), batch_size):
+        batch = service.new_batch_http_request()
+
+        for message_id in message_ids[i:i + batch_size]:
+            request = service.users().messages().trash(userId=user_id, id=message_id)
+            batch.add(
+                request,
+                callback=lambda request_id, response, exception: (
+                    print(f"✔️ Trashed: {response['id']}") if response else print(f"❌ Error: {exception}")
+                )
+            )
+
+        try:
+            batch.execute()
+        except HttpError as e:
+            print(f"Batch execution failed: {e}")
+    
+    
+def permanently_delete_email(service, user_id, message_id):
+    service.users().messages().delete(userId=user_id, id=message_id).execute()
+    
+    
+def untrash_email(service, user_id, message_id):
+    service.users().messages().untrash(userId=user_id, id=message_id).execute()
+    
+def batch_untrash_emails(service, user_id, message_ids):
+    batch = service.new_batch_http_request()
+    for message_id in message_ids: 
+        batch.add(service.users().messages().untrash(userId=user_id, id=message_id))
+        batch.execute()
+        
+def empty_trash(service):
+    page_token = None
+    total_deleted = 0
+
+    def callback(request_id, response, exception):
+        if exception is not None:
+            print(f"Failed to delete message {request_id}: {exception}")
+        else:
+            print(f"Deleted message {request_id}")
+
+    while True:
+        response = service.users().messages().list(
+            userId='me',
+            q='in:trash',
+            pageToken=page_token,
+            maxResults=500
+        ).execute()
+
+        messages = response.get('messages', [])
+        if not messages:
+            break
+
+        batch = service.new_batch_http_request()
+        for message in messages:
+            batch.add(
+                service.users().messages().delete(userId='me', id=message['id']),
+                callback=callback
+            )
+        batch.execute()
+
+        total_deleted += len(messages)
+        page_token = response.get('nextPageToken')
+        if not page_token:
+            break
+
+    return total_deleted
+
+
+
+
+def list_draft_email_messages(service, user_id='me', max_results=5):
+    drafts = []
+    next_page_token = None
+
+    while True: 
+        result = service.users().drafts().list(
+            userId=user_id, 
+            maxResults=min(500, max_results - len(drafts)) if max_results else 500, 
+            pageToken=next_page_token
+        ).execute()
+        
+        drafts.extend(result.get('drafts', []))
+        
+        next_page_token = result.get('nextPageToken')  # FIXED VARIABLE NAME
+        
+        if not next_page_token or (max_results and len(drafts) >= max_results): 
+            break
+        
+    return drafts[:max_results] if max_results else drafts
+
+
+def create_draft_email(service, to, subject, body, body_type='plain', attachment_paths=None):
+    message = MIMEMultipart()
+    message['to'] = to
+    message['subject'] = subject
+
+    if body_type.lower() not in ['plain', 'html']:
+        raise ValueError("body_type must be either 'plain' or 'html'")
+
+    message.attach(MIMEText(body, body_type.lower()))
+
+    if attachment_paths:
+        for attachment_path in attachment_paths:
+            if os.path.exists(attachment_path):
+                filename = os.path.basename(attachment_path)
+
+                with open(attachment_path, "rb") as attachment:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(attachment.read())
+                    encoders.encode_base64(part)
+
+                    part.add_header(
+                        "Content-Disposition",
+                        f"attachment; filename={filename}",
+                    )
+
+                    message.attach(part)
+            else:
+                raise FileNotFoundError(f"File not found - {attachment_path}")
+
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
+
+    draft = service.users().drafts().create(
+        userId='me',
+        body={'message': {'raw': raw_message}}
+    ).execute()
+
+    return draft
+
+
+def get_email_draft_message_details(service, draft_id):
+    # Step 1: Get the draft
+    draft_detail = service.users().drafts().get(userId='me', id=draft_id).execute()
+    draft_message = draft_detail['message']
+    payload = draft_message['payload']
+    headers = payload.get('headers', [])
+
+    # Step 2: Extract header values
+    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+    sender = next((h['value'] for h in headers if h['name'] == 'From'), 'No Sender')
+    recipients = next((h['value'] for h in headers if h['name'] == 'To'), 'No recipients')
+    date = next((h['value'] for h in headers if h['name'] == 'Date'), 'No Date')
+    snippet = draft_message.get('snippet', 'No snippet')
+    label = ', '.join(draft_message.get('labelIds', []))
+    star = 'STARRED' in draft_message.get('labelIds', [])
+
+    # Step 3: Check for attachments
+    has_attachments = any(
+        part.get('filename') for part in payload.get('parts', []) if part.get('filename')
+    )
+
+    # Step 4: Get body content
+    body = '<Text body not available>'
+    parts = payload.get('parts', [])
+    for part in parts:
+        if part.get('mimeType') == 'text/plain' and 'data' in part.get('body', {}):
+            body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+            break
+
+    return {
+        'subject': subject,
+        'sender': sender,
+        'recipients': recipients,
+        'body': body,
+        'snippet': snippet,
+        'has_attachments': has_attachments,
+        'date': date,
+        'star': star,
+        'label': label
+    }
+
+def send_draft_email(service, draft_id): 
+    draft = service.users().drafts().send(userId='me', body={'id': draft_id}).execute()
+    return draft
+
+def delete_draft_email(service, draft_id): 
+    service.users().drafts().delete(userId='me', id=draft_id).execute()
+    
+def get_message_and_replies(service, message_id):
+    message = service.users().messages().get(userId='me', id=message_id, format='full').execute()
+    thread_id = message['threadId']
+    thread = service.users().threads().get(userId='me', id=thread_id).execute()
+
+    processed_messages = []
+    for msg in thread['messages']:
+        subject = next((header['value'] for header in msg['payload']['headers']
+                        if header['name'].lower() == 'subject'), 'No Subject')
+        from_header = next((header['value'] for header in msg['payload']['headers']
+                            if header['name'].lower() == 'from'), 'Unknown Sender')
+        date = next((header['value'] for header in msg['payload']['headers']
+                     if header['name'].lower() == 'date'), 'Unknown Date')
+
+        content = _extract_body(msg['payload'])  # <- Ensure this helper function exists
+
+        processed_messages.append({
+            'id': msg['id'],
+            'subject': subject,
+            'from': from_header,
+            'date': date,
+            'body': content
+        })
+
+    return processed_messages
