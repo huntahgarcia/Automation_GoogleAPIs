@@ -1,0 +1,38 @@
+'SENDING EMAIL'
+
+import marimo as mo
+from pathlib import Path
+from gmailapi import init_gmail_service, send_email
+
+
+client_file = 'client_secret.json'
+service = init_gmail_service(client_file)
+
+to_address = 'example@gmail.com'
+
+email_subject = 'Automation Test v1'
+email_body = 'This is a test email using the Gmail API.'
+
+attachment_dir = Path('./attachments')
+attachment_files = list(attachment_dir.glob('*'))
+
+
+response_email_sent = send_email(
+    service, 
+    to_address,
+    email_subject, 
+    email_body, 
+    body_type='plain', 
+    attachment_paths=attachment_files
+)
+
+print(response_email_sent)
+
+# Get message ID from the send response
+message_id = response_email_sent.get('id')
+
+# Fetch the full message details including labelIds
+message_metadata = service.users().messages().get(userId='me', id=message_id, format='metadata').execute()
+label_ids = message_metadata.get('labelIds', [])
+
+print("Label IDs:", label_ids)
