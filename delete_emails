@@ -1,0 +1,76 @@
+mport marimo as mo
+from gmailapi import (
+    init_gmail_service,
+    search_emails,
+    get_email_message_details,
+    trash_email,
+    batch_trash_emails,
+    untrash_email,
+    modify_email_labels,
+    empty_trash
+)
+
+client_file = 'client_secret.json'
+service = init_gmail_service(client_file)
+
+# Move Emails to the trash folder
+query = 'from:me'
+email_messages = search_emails(service, query, max_results=1)
+
+for email_message in email_messages: 
+    email_message_detail = get_email_message_details(service, email_message['id'])
+    trash_email(service, 'me', email_message['id'])
+    print(f"Email \"{email_message_detail['subject']}\" moved to trash.")
+
+
+# Untrash emails from the trash folder. Move to Inbox 
+query = 'in:trash'
+email_messages = search_emails(service, query, max_results=1)
+
+for email_message in email_messages: 
+    email_message_detail = get_email_message_details(service, email_message['id'])
+
+    print(f"Email '{email_message_detail['subject']}' will be moved to inbox.")
+
+    # Move back to inbox
+    untrash_email(service, 'me', email_message['id'])
+
+    # Explicitly reattach INBOX label (optional)
+    modify_email_labels(service, 'me', email_message['id'], add_labels=['INBOX'])
+
+
+# Trash a batch of emails 
+target_emails = []
+query = 'subject:AICPA'
+email_messages = search_emails(service, query, max_results=100)
+
+for email_message in email_messages: 
+    email_message_detail = get_email_message_details(service, email_message['id'])
+    print(f'Email "{email_message_detail["subject"]}" will be moved to trash.')
+    target_emails.append(email_message['id'])
+
+# Make sure batch_trash_emails is defined or imported
+batch_trash_emails(service, 'me', target_emails)
+
+
+target_emails = []
+query = 'from:AICPA_Subscriptions@e2.aicpa-cima.com'
+email_messages = search_emails(service, query, max_results=100)
+
+for email_message in email_messages: 
+    email_message_detail = get_email_message_details(service, email_message['id'])
+    print(f'Email "{email_message_detail["subject"]}" will be moved to trash.')
+    target_emails.append(email_message['id'])
+
+# Make sure batch_trash_emails is defined or imported
+batch_trash_emails(service, 'me', target_emails)
+
+# Confirm how many were successfully moved
+query_check = 'from:AICPA_Subscriptions@e2.aicpa-cima.com in:trash'
+trashed_emails = search_emails(service, query_check, max_results=100)
+
+print(f"\nMoved {len(trashed_emails)} messages to Trash.")
+
+
+
+empty_trash(service)
